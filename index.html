@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Ant Smash</title>
+  <style>
+    html, body { margin:0; padding:0; overflow:hidden; }
+    canvas { display:block; }
+    #hud {
+      position: absolute;
+      top: 10px; left: 50%; transform: translateX(-50%);
+      color: #fff; font: 20px sans-serif; text-shadow: 1px 1px 2px #000;
+      z-index: 10;
+    }
+    #gameOverScreen {
+      position: absolute;
+      top: 0; left: 0; width: 100%; height: 100%;
+      background: rgba(0, 0, 0, 0.7);
+      color: white;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      font-family: sans-serif;
+      z-index: 20;
+    }
+    #gameOverScreen button {
+      margin-top: 20px;
+      padding: 10px 20px;
+      font-size: 18px;
+      background: #4CAF50;
+      color: white;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <div id="hud">Score: 0 | Boss: 0/50 | Lives: 3</div>
+  <div id="gameOverScreen">
+    <h1>Game Over</h1>
+    <p id="finalScore"></p>
+    <button id="replayBtn">Play Again</button>
+  </div>
+  <canvas id="game"></canvas>
+
+  <script>
+(() => {
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  let W, H;
+  function resize(){
+    W = canvas.width = innerWidth;
+    H = canvas.height = innerHeight;
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  let hue, ants, bosses, particles;
+  let score, bossCount, nextBossAt, lives, gameRunning;
+  let highScore = localStorage.getItem('antHighScore') || 0;
+
+  const HUD = document.getElementById('hud');
+  const gameOverScreen = document.getElementById('gameOverScreen');
+  const finalScore = document.getElementById('finalScore');
+
+  const smashSound = new Audio('https://actions.google.com/sounds/v1/human_voices/pop.ogg');
+  const missSound = new Audio('https://actions.google.com/sounds/v1/alarms/beep_short.ogg');
+  const tapSound = new Audio('https://actions.google.com/sounds/v1/cartoon/wood_plank_flicks.ogg');
+
+  function rand(min,max){ return Math.random()*(max-min)+min; }
+
+  class Ant {
+    constructor(isBoss=false, level=1) {
+      this.r = isBoss ? 40 + level*2 : 20;
+      this.x = rand(this.r, W - this.r);
+      this.y = -this.r;
+      this.vx = 0;
+      this.vy = isBoss ? 0.5 + level * 0.1 : rand(1, 2);
+      this.isBoss = isBoss;
+      this.health = isBoss ? level : 1;
+      this.level = level;
+      this.color = `hsl(${rand(0,360)},60%,50%)`;
+    }
+    update() { this.y += this.vy; }
+    draw() {
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, this.r, 0, Math.PI*2);
+      ctx.fillStyle = this.color;
+      ctx.fill();
+      ctx.fillStyle = '#000';
+      ctx.beginPath();
+      ctx.arc(this.x - this.r/3, this.y - this.r/4, this.r/6, 0, Math.PI*2);
+      ctx.arc(this.x + this.r/3, this.y - this.r/4, this.r/6, 0, Math.PI*2);
+      ctx.fill();
+    }
+  }
+
+  class Particle {
+    constructor(x,y,color) {
+      this.x = x; this.y = y;
+      const angle = rand(0,Math.PI*2);
+      const speed = rand(1,4);
+      this.vx = Math.cos(angle)*speed;
+      this.vy = Math.sin(angle)*speed;
+      this.r = rand(2,5);
+      this.color = color;
+      this.alpha = 1;
+    }
+    update(){
+      this.x += this.vx; this.y += this.vy;
+      this.alpha -= 0.02;
+    }
+    draw(){
+      ctx.globalAlpha = this.alpha;
+      ctx.beginPath();
+      ctx.arc(this.x,this.y,this.r,0,Math.PI*2);
+      ctx.fillStyle = this.color;
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  let spawnInterval;
+  function startGame() {
+    hue = 0;
+    ants = [];
+    bosses = [];
+    particles = [];
+    score = 0;
+    bossCount = 0;
+    nextBossAt = 10;
+    lives = 3;
+    gameRunning = true;
+    HUD.textContent = `Score: 0 | Boss: 0/50 | Lives: 3`;
+    gameOverScreen.style.display = 'none';
+
+    clearInterval(spawnInterval);
+    spawnInterval = setInterval(() => {
+      if (ants.length < 20) ants.push(new Ant());
+    }, 1000);
+
+    loop();
+  }
+
+  function loop(){
+    if (!gameRunning) return;
+
+    hue = (hue + 0.5) % 360;
+    const grad = ctx.createLinearGradient(0,0,W,H);
+    grad.addColorStop(0, `hsl(${hue},70%,50%)`);
+    grad.addColorStop(1, `hsl(${(hue+60)%360},70%,60%)`);
+    ctx.fillStyle = grad;
+    ctx.fillRect(0,0,W,H);
+
+    ants = ants.filter(a => {
+      a.update();
+      a.draw();
+      if (a.y - a.r > H) {
+        lives--;
+        navigator.vibrate?.(100);
+        missSound.play();
+        updateHUD();
+        return false;
+      }
+      return true;
+    });
+
+    bosses = bosses.filter(b => {
+      b.update();
+      b.draw();
+      if (b.y - b.r > H) {
+        lives--;
+        navigator.vibrate?.(200);
+        missSound.play();
+        updateHUD();
+        return false;
+      }
+      return true;
+    });
+
+    particles = particles.filter(p => p.alpha > 0);
+    particles.forEach(p => { p.update(); p.draw(); });
+
+    if (lives <= 0) {
+      endGame();
+      return;
+    }
+
+    requestAnimationFrame(loop);
+  }
+
+  function handleTap(evt){
+    if (!gameRunning) return;
+
+    tapSound.play();
+
+    const rect = canvas.getBoundingClientRect();
+    const x = (evt.touches ? evt.touches[0].clientX : evt.clientX) - rect.left;
+    const y = (evt.touches ? evt.touches[0].clientY : evt.clientY) - rect.top;
+
+    for(let i = bosses.length-1; i >= 0; i--) {
+      const b = bosses[i];
+      if (Math.hypot(x-b.x, y-b.y) < b.r) {
+        b.health--;
+        spawnParticles(x, y, b.color, 15);
+        navigator.vibrate?.(100);
+        smashSound.play();
+        if (b.health <= 0){
+          bosses.splice(i,1);
+          score++;
+        }
+        updateHUD();
+        return;
+      }
+    }
+
+    for(let i = ants.length-1; i >= 0; i--) {
+      const a = ants[i];
+      if (Math.hypot(x-a.x, y-a.y) < a.r) {
+        ants.splice(i,1);
+        spawnParticles(x, y, a.color, 10);
+        navigator.vibrate?.(50);
+        smashSound.play();
+        score++;
+        if (score >= nextBossAt && bossCount < 50) {
+          bossCount++;
+          bosses.push(new Ant(true, bossCount));
+          nextBossAt += 10;
+        }
+        updateHUD();
+        return;
+      }
+    }
+  }
+
+  function spawnParticles(x,y,color,count){
+    for(let i = 0; i < count; i++) {
+      particles.push(new Particle(x,y,color));
+    }
+  }
+
+  function updateHUD(){
+    HUD.textContent = `Score: ${score} | Boss: ${bossCount}/50 | Lives: ${lives}`;
+  }
+
+  function endGame(){
+    gameRunning = false;
+    clearInterval(spawnInterval);
+    if (score > highScore) {
+      highScore = score;
+      localStorage.setItem('antHighScore', highScore);
+    }
+    finalScore.innerHTML = `Your Score: ${score}<br>High Score: ${highScore}`;
+    gameOverScreen.style.display = 'flex';
+  }
+
+  canvas.addEventListener('touchstart', handleTap);
+  canvas.addEventListener('mousedown', handleTap);
+
+  document.getElementById('replayBtn').addEventListener('click', () => {
+    startGame();
+  });
+
+  startGame(); // Start when page loads
+})();
+  </script>
+</body>
+</html>
